@@ -1,0 +1,358 @@
+---
+title: "STA 141A Course Project"
+author: "Han Truong"
+date: "2024-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+session1 <- readRDS("~/STA 141a/Course Project/Data/session1.rds")
+session2 <- readRDS("~/STA 141a/Course Project/Data/session2.rds")
+session3 <- readRDS("~/STA 141a/Course Project/Data/session3.rds")
+session4 <- readRDS("~/STA 141a/Course Project/Data/session4.rds")
+session5 <- readRDS("~/STA 141a/Course Project/Data/session5.rds")
+session6 <- readRDS("~/STA 141a/Course Project/Data/session6.rds")
+session7 <- readRDS("~/STA 141a/Course Project/Data/session7.rds")
+session8 <- readRDS("~/STA 141a/Course Project/Data/session8.rds")
+session9 <- readRDS("~/STA 141a/Course Project/Data/session9.rds")
+session10 <- readRDS("~/STA 141a/Course Project/Data/session10.rds")
+session11 <- readRDS("~/STA 141a/Course Project/Data/session11.rds")
+session12 <- readRDS("~/STA 141a/Course Project/Data/session12.rds")
+session13 <- readRDS("~/STA 141a/Course Project/Data/session13.rds")
+session14 <- readRDS("~/STA 141a/Course Project/Data/session14.rds")
+session15 <- readRDS("~/STA 141a/Course Project/Data/session15.rds")
+session16 <- readRDS("~/STA 141a/Course Project/Data/session16.rds")
+session17 <- readRDS("~/STA 141a/Course Project/Data/session17.rds")
+session18 <- readRDS("~/STA 141a/Course Project/Data/session18.rds")
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tidyverse)
+library(caret) 
+library(xgboost)
+library(pROC)
+library(readr)
+```
+
+## Abstract
+
+Recent studies delve into the neural underpinnings of how mice make decisions through utilizing visual stimuli and neural recordings. Our of the goals of quantitative neuroscience is to develop predictive models that establish the relationship between the sensory streams with neuron firing. This aims to explore the neural dynamics during decision-making tasks, shedding light on the neuronal correlates of visual processing and choice behavior in mice. By pinpointing neural signatures associated with varying stimuli, the findings ultimately contribute to a deeper understanding of cognitive processes in decision-making in mice.
+
+## Introduction
+
+Progress in measurement techniques and analysis allow us to access the neural activity in brain areas that could transform sensory input into behavior. The study conducted by Steinmetz et al.(2019) provides an in-depth look into the neural activity during visual decision-making tasks in mice. By focusing on the spike trains recorded from the visual cortex of mice, we aim to develop a model capable of forecasting behavioral responses based on neural activity. Through the integration of experimental approaches, we deepen our understanding of the neural basis of behavior.
+
+## Exploratory Analysis
+
+## i. Data structures across sessions
+
+We were given a total of 18 RDS files that document the 18 sessions of experiments performed on the following mice: Cori, Forssmann, Hench, and Lederberg.
+
+```{r, echo = FALSE}
+session=list(session1,session2,session3,session4,session5,session6,session7,session8,session9,session10,session11,session12,session13,session14,session15,session16,session17,session18)
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+  print(session[[i]]$mouse_name)
+  print(session[[i]]$date_exp)}
+```
+
+In this section, we focus solely on session 3 for interpretation. There are a total of 7 variables in each session. The summary of these features are listed here:
+
+-   `feedback_type`: indicator for feedback success (1 for success, -1 for failure)
+-   `contrast_left`: contrast of the left stimulus
+-   `constrast_right`: contrast of the right stimulus
+-   `mouse_name`: influenced by four factors
+-   `time`: vector of dimension across sessions for number of trials
+-   `spks`: matrix of dimensions across session *i* for number of trials
+-   `date_exp`: date that the experiment was performed and recorded
+-   `brain_area`: area of the brain where each neuron live
+
+```{r}
+# session 
+names(session[[3]])
+summary(session[[3]])
+```
+
+```{r}
+# trial 
+dim(session[[3]]$spks[[11]]) #dimension of the data frame
+length(session[[3]]$brain_area)
+
+unique(session[[3]]$brain_area) #name of brain area in each session
+length(session[[3]]$feedback_type) #activities of brain area in trial
+
+session[[3]]$spks[[11]][6,] # Each row contains 40 time bins.
+```
+
+In this trial, each row contains 40 time bins. Take the 11th trial in Session 3 for example, there are a total of 619 neurons in this trial. These 619 neurons are located in the `unique(session[[3]]$brain_area)` of the mouse brain. We can visualize the activities of these areas across the `length(session[[3]]$feedback_type)` trials. The spike trains of these neurons are stored in `session[[3]]$spks[[11]]`, which is a 619 by 40 matrix. Each entry in this matrix represents the number of spikes of a neuron in each time bin.
+
+```{r}
+# feedback type 
+n.session=length(session)
+n_success = 0
+n_trial = 0
+for(i in 1:n.session){tmp = session[[3]];
+    n_trial = n_trial + length(tmp$feedback_type);
+    n_success = n_success + sum(tmp$feedback_type == 1);}
+n_success/n_trial
+```
+
+To calculate the feedback type, the number of successful trials (trials where the feedback type is 1) is divided by the total number of trials to get the probability of success for each session. For example here the probability of success of trials in session 3 is 66.2%.
+
+```{r}
+# brain area 
+area = c()
+for(i in 1:n.session){tmp = session[[3]]; area = c(area, unique(tmp$brain_area))}
+
+area = unique(area)
+length(area)
+```
+
+We find that there are 11 areas of the brain being stimulated in session 3.
+
+## ii. Neural activities during each trial
+
+Now, we connect the neuron spikes to the brain area in each trial. We will use the activities in Session 3 Trial 5 for our analysis.
+
+```{r}
+ises = 3 #indicator for session 
+itri = 5 #indicator for trial 
+
+ave_spk <- function(itri, session){
+  spk_trial <- session[[ises]]$spks[[itri]]
+  brain.area <- session[[ises]]$brain_area
+  spk.count = apply(spk_trial,1,sum) #count number of spikes in each neuron 
+  spk.average.tapply = tapply(spk.count, brain.area, mean) # average of spikes across neurons
+  return(spk.average.tapply)}
+
+library(dplyr)
+mun <- data.frame(area = brain.area, spikes = spk.count)
+spk.average.dplyr =mun %>% group_by(area) %>% summarize(mean= mean(spikes)) #calculate average by group 
+spk.average.dplyr
+
+hist(spk.average.tapply, main = "Distribution of Average Spikes per Neuron", xlab = "Average Spikes per Neuron")
+```
+
+From our results, the brain areas with the higher average spikes per neuron are MRN and SPF, which may indicate higher neuronal activity to stimuli in these areas. The distribution of the average spikes per neuron from the histogram appears to be right-skewed, implying some brain areas having higher average values compared to others. Brain areas with higher average spikes per neuron, in this case MRN and SPF, may play a more significant role in decision-making tasks in mice.
+
+## Data Processing
+
+```{r}
+obs = length(session[[3]]$feedback_type)
+
+#create data frame with three columns: feedback type, decision, and ave spikes
+dat_frame = tibble(feedback_type = as.factor(session[[3]]$feedback_type), decision = rep('name', obs),
+    avg_spikes = rep(0, obs))  
+
+# decision
+for (i in 1:obs){
+    if (session[[3]]$contrast_left[i] > session[[3]]$contrast_right[i]){dat_frame$decision[i] = '1' } 
+    else if (session[[3]]$contrast_left[i] < session[[3]]$contrast_right[i]){dat_frame$decision[i] = '2'}
+    else if (session[[3]]$contrast_left[i] == session[[3]]$contrast_right[i] & session[[3]]$contrast_left[i] ==0){
+  dat_frame$decision[i] = '3' } else{dat_frame$decision[i] = '4' }
+    
+  # average spikes 
+  spks.trial = session[[3]] $ spks[[i]]
+  total.spikes = apply (spks.trial, 1, sum)
+  dat_frame$avg_spikes[i] = mean (total.spikes)}
+
+dat_frame$decision = as.factor(dat_frame$decision)
+summary(dat_frame)
+```
+
+The average spikes was calculated to be around 2.232, re-enforcing our finding that brain areas like MRN and SPF with average spikes 5.63 and 4.8 to have very high neuronal activity response to stimuli.
+
+```{r}
+meta <- tibble(mouse_name = rep('name',n.session), brain_area = rep(0,n.session),
+  neurons = rep(0,n.session), trials = rep(0,n.session), success_rate = rep(0,n.session))
+
+for(i in 1:n.session){
+  mun = session[[i]];
+  meta[i,1]=mun$mouse_name;
+  meta[i,2]=length(unique(mun$brain_area));
+  meta[i,3]=dim(mun$spks[[1]])[1];
+  meta[i,4]=length(mun$feedback_type);
+  meta[i,5]=mean(mun$feedback_type+1)/2;}
+
+install.packages("knitr")
+library(knitr)
+colnames(meta) <- c("Mouse Name", "Brain Area", "Neurons", "Trials", "Success Rate")
+title <- "Table of Summary of Experiment Results"
+kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2, caption = title)
+```
+
+Here is a table showing the brain activity, number of trials, and success rate for each trial for each mouse. The column "date_exp" was omitted since it was not relevant to our analysis. From our result, Lederberg exhibits the most success rate out of the four mice and he was being tested the most.
+
+```{r}
+trial_data <- function(session_id, trial_id){
+  spikes <- session[[session_id]]$spks[[trial_id]]
+  if (any(is.na(spikes))){
+    disp("value missing")}
+  trial_tibble <- tibble("neuron_spike" = rowSums(spikes))  %>%  add_column("brain_area" = session[[session_id]]$brain_area ) %>% group_by(brain_area) %>% summarize( region_sum_spike = sum(neuron_spike), region_count = n(),region_mean_spike = mean(neuron_spike)) 
+  
+  trial_tibble  = trial_tibble%>% add_column("trial_id" = trial_id) %>% add_column("contrast_left"= session[[session_id]]$contrast_left[trial_id]) %>% add_column("contrast_right"= session[[session_id]]$contrast_right[trial_id]) %>% add_column("feedback_type"= session[[session_id]]$feedback_type[trial_id]) 
+  trial_tibble}
+
+trial_tibble <- trial_data(3,5) #session 3 trial 5 
+trial_tibble
+```
+
+```{r}
+session_data <- function(session_id){
+  n_trial <- length(session[[session_id]]$spks) #number of trials in session i 
+  trial_list <- list() 
+  for (trial_id in 1:n_trial){
+    trial_tibble <- trial_data(session_id,trial_id) #retrieve and process trial data 
+    trial_list[[trial_id]] <- trial_tibble}
+  session_tibble <- do.call(rbind, trial_list) #combine into a single data frame 
+  session_tibble <- session_tibble %>% add_column("mouse_name" = session[[session_id]]$mouse_name) %>% add_column("date_exp" = session[[session_id]]$date_exp) %>% add_column("session_id" = session_id) 
+  session_tibble}
+
+session_3 <- session_data(3)
+head(session_3)
+```
+
+Here, the `session_data` function was created to facilitate the retrieval and processing of data for individual session. This will allow us to do further analysis at the session level.
+
+```{r, echo=FALSE}
+session_list = list()
+for (session_id in 1:18){
+  session_list[[session_id]] <- session_data(session_id)} #retrieve data for current session ID and store it in session_list 
+
+full_tibble <- do.call(rbind, session_list) #combine all data frames into one large data frame 
+
+full_tibble$success <- full_tibble$feedback_type == 1 #add success column 
+full_tibble$success <- as.numeric(full_tibble$success)
+full_tibble$contrast_diff <- abs(full_tibble$contrast_left-full_tibble$contrast_right) #absolute diff between the values in contrast left and right 
+```
+
+This code above processes data from multiple sessions, then combines it into a single big data frame. We also added 2 columns: `success` to indicate whether the feedback type is equal to 1 (which means success), and `contrast_diff` which represents the difference in contrast levels presented in each trial.
+
+```{r}
+binname <- paste0("bin", as.character(1:40))
+
+trial_functional_data <- function(session_id, trial_id){
+  spikes <- session[[session_id]]$spks[[trial_id]]
+  if (any(is.na(spikes))){
+    disp("value missing")}
+
+  trial_bin_ave <- matrix(colMeans(spikes), nrow = 1)
+  colnames(trial_bin_ave) <- binname
+  trial_tibble  = as_tibble(trial_bin_ave)%>% add_column("trial_id" = trial_id) %>% add_column("contrast_left"= session[[session_id]]$contrast_left[trial_id]) %>% add_column("contrast_right"= session[[session_id]]$contrast_right[trial_id]) %>% add_column("feedback_type"= session[[session_id]]$feedback_type[trial_id])
+  trial_tibble}
+
+session_functional_data <- function(session_id){
+  n_trial <- length(session[[session_id]]$spks)
+  trial_list <- list()
+  for (trial_id in 1:n_trial){
+    trial_tibble <- trial_functional_data(session_id,trial_id)
+    trial_list[[trial_id]] <- trial_tibble }
+  session_tibble <- as_tibble(do.call(rbind, trial_list))
+  session_tibble <- session_tibble %>% add_column("mouse_name" = session[[session_id]]$mouse_name) %>% add_column("date_exp" = session[[session_id]]$date_exp) %>% add_column("session_id" = session_id) 
+  session_tibble}
+
+```
+
+Here, we created the function `trial_functional_data` to process data for a single trial within a session. It will calculate the average spike counts across all neurons for each time bin. Then, the `session_functional_data` was created to process data for an entire session by iterating through all of the trials. We break down the data processing tasks into 2 smaller functions to be reused across multiple sessions and trials without the need to duplicate code.
+
+```{r}
+session_list = list()
+for (session_id in 1: 18){
+  session_list[[session_id]] <- session_functional_data(session_id)}
+
+full_functional_tibble <- as_tibble(do.call(rbind, session_list)) #combine all data frames in 'session_list' into a single data frame 
+full_functional_tibble$session_id <- as.factor(full_functional_tibble$session_id ) #convert 'session_id' column to a factor 
+full_functional_tibble$contrast_diff <- abs(full_functional_tibble$contrast_left-full_functional_tibble$contrast_right) #calculate the abs difference between contrast left and right values 
+
+full_functional_tibble$success <- full_functional_tibble$feedback_type == 1
+full_functional_tibble$success <- as.numeric(full_functional_tibble$success)
+
+head(full_functional_tibble)
+```
+
+Here, our data from multiple sessions were combined into a single data frame to be used to develop predictive models to predict neuronal responses to stimuli and trial success later based on neuronal activity. We can also use this to compare outcomes between different sessions to identify differences in neural responses under various conditions.
+
+```{r, echo=FALSE}
+full_tibble %>% filter (trial_id==1) %>% group_by(session_id) %>% summarise(sum(region_count))
+full_tibble %>% group_by(session_id) %>% summarise(unique_area = n_distinct(brain_area))
+
+average_spike <-full_tibble %>% group_by( session_id, trial_id) %>% mutate(mean_spike = sum(region_sum_spike)/sum(region_count))
+average_spike %>% group_by(session_id) %>% summarise(mean_session_spike = mean(mean_spike))
+```
+
+```{r}
+# Visualize how success rates change over each trial for individual session 
+full_functional_tibble$trial_group = cut(full_functional_tibble$trial_id, breaks = seq(0, max(full_functional_tibble$trial_id), by = 25),include.lowest = TRUE)
+levels(full_functional_tibble$trial_group) <- seq(0, max(full_functional_tibble$trial_id), by = 25)[2:18]
+
+success_rate <- aggregate(success ~ session_id + trial_group, data = full_functional_tibble, FUN = function(x) mean(x) )
+ggplot(success_rate, aes(x = trial_group, y = success)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~session_id, ncol=3) +
+      theme_bw()
+```
+
+```{r}
+# visualize how overall neuron spike rate change over each trial 
+col_names <-names(full_functional_tibble)
+region_sum_subset <- col_names[grep("^region_sum", col_names)]
+region_mean_subset <- col_names[grep("^region_mean", col_names)]
+                                     
+average_spike <- full_tibble %>% group_by( session_id,trial_id) %>% summarise(mean_spike = sum(region_sum_spike)/sum(region_count))
+
+average_spike$mouse_name <- full_functional_tibble$mouse_name
+average_spike$contrast_diff <- full_functional_tibble$contrast_diff
+average_spike$success <- full_functional_tibble$success
+
+ggplot(average_spike, aes(x = trial_id, y = mean_spike)) + 
+  geom_line()+
+  geom_smooth(method = "loess")+  # Fit a smooth spline
+
+  facet_wrap(~session_id)
+  
+ggplot(average_spike, aes(x = trial_id, y = mean_spike)) + 
+  geom_line()+
+  geom_smooth(method = "loess")+  # Fit a smooth spline
+
+  facet_wrap(~mouse_name)
+```
+
+```{r, echo = FALSE}
+features = full_functional_tibble[,1:40] # extract the first 40 columns of the data frame 
+scaled_features <- scale(features)
+pca_result <- prcomp(scaled_features)
+pc_df <- as.data.frame(pca_result$x)
+pc_df$session_id <- full_functional_tibble$session_id
+pc_df$mouse_name <- full_functional_tibble$mouse_name # new column contains mouse name 
+
+ggplot(pc_df, aes(x = PC1, y = PC2, color=session_id)) + geom_point() + labs(title ="PCA: PC1 vs PC2 Colored by Session ID") 
+```
+
+The code performs PCA on the features extracted from `full_functional_tibble`, standardizes the features to ensure all the features have equal importance in the analysis. We performed PCA to reduce the number of variables in the data set and transformed the original variables into a new set of PCs. The generated scatter plot exhibits how different sessions are distributed where each point on the plot represents a session (from 1 to 18). The color of the points indicates different session IDs. As shown in the plot, sessions with similar patterns of neural activity are expected to cluster together. For example, many of the pink points (sessions 16, 17, 18) are clustered closely together in the range 2 to 5 of PC1. Meanwhile, sessions with different patterns, namely sessions 7 and 14, are visually separated.
+
+```{r}
+ggplot(pc_df, aes(x = PC1, y = PC2, color = mouse_name)) + geom_point() +labs(title = "PCA: PC1 vs PC2 Colored By Mouse Name")
+```
+
+This scatter plot exhibits how different mice are distributed in a reduced-dimensional space. Each point corresponds to the mouse name. Through these 2 plots, we can see the neuronal activities of Lederberg correlates with Session 13 negatively and with Sessions 14-15 around the PC1 = 0.
+
+## Data Integration
+
+```{r}
+predictives <- c("session_id","trial_id","contrast_right","contrast_left", "contrast_diff" ,binname)
+head(full_functional_tibble[predictives])
+
+predictive_dat <- full_functional_tibble[predictives]
+#predictive_dat$success <- as.numeric(predictive_dat$success)
+predictive_dat$trial_id <- as.numeric(predictive_dat$trial_id)
+label <- as.numeric(full_functional_tibble$success)
+X <- model.matrix(~., predictive_dat) 
+```
+
+## Predictive Modeling
